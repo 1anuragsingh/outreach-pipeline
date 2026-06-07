@@ -1,0 +1,12 @@
+Subject: {name} — noticed something about {company}
+
+Hey {name},
+
+Most {title}s I speak with at companies like {company} are sitting on untapped pipeline — they have the product and the market, but outreach just doesn't convert the way it should.
+
+{sender_company} fixes that. We help B2B teams build outreach that actually books calls, without the spray-and-pray approach that burns your domain and your reputation.
+
+I'd rather show you than explain it — worth 15 minutes this week?
+
+{sender_name}
+{sender_company}
