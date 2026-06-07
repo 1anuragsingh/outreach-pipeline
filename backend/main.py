@@ -12,7 +12,7 @@ from stages import eazyreach, ocean, prospeo
 from stages.brevo import _load_template, _render, _send_one
 from utils.logger import logger
 
-TEMPLATE_PATH = Path("templates/email.txt")
+TEMPLATE_PATH = Path(__file__).parent / "templates" / "email.txt"
 _SEND_DELAY = 2.0
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -20,8 +20,9 @@ _SEND_DELAY = 2.0
 app = FastAPI(title="Outreach Pipeline API")
 
 _cors_origins = ["http://localhost:5173"]
-if _fe := os.getenv("FRONTEND_URL", ""):
-    _cors_origins.append(_fe)
+for _fe_url in os.getenv("FRONTEND_URL", "").split(","):
+    if _fe_url.strip():
+        _cors_origins.append(_fe_url.strip())
 
 app.add_middleware(
     CORSMiddleware,
