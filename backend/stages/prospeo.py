@@ -1,91 +1,67 @@
 import requests
 
-from utils.rate_limiter import rate_limit, retry
-from config import PROSPEO_API_KEY
+from config import APOLLO_API_KEY
 from utils.logger import logger
 
-_ENDPOINT    = "https://api.prospeo.io/v1/domain-search"
-_RATE_DELAY  = 1.5
-_MAX_DOMAINS = 5   # only look up 5 domains per run — 5 Prospeo credits max
+_ENDPOINT = "https://api.apollo.io/v1/people/search"
 
-_SENIORITY_KEYWORDS = (
-    "ceo", "cto", "cmo", "cfo", "coo",
-    "vp", "vice president",
-    "director",
-    "head of",
-    "founder", "co-founder",
-    "president",
-)
-
-
-def _is_decision_maker(title: str) -> bool:
-    t = title.lower()
-    return any(kw in t for kw in _SENIORITY_KEYWORDS)
-
-
-@retry(max_attempts=3, delay=2, backoff=2)
-def _fetch_people(domain: str, headers: dict) -> list[dict]:
-    response = requests.post(
-        _ENDPOINT,
-        json={"domain": domain, "limit": 5},
-        headers=headers,
-        timeout=30,
-    )
-    if not response.ok:
-        raise Exception(f"HTTP {response.status_code}: {response.text}")
-    data: dict = response.json()
-    if not data.get("status"):
-        raise Exception(f"API error: {data.get('error_code', 'unknown')}")
-    return data.get("response", {}).get("email_list", [])
+# Apollo accepts a list of titles and does partial matching
+_SENIORITY_TITLES = [
+    "CEO", "CTO", "CMO", "CFO", "COO",
+    "VP", "Vice President",
+    "Director",
+    "Head",
+    "Founder", "Co-Founder",
+    "President",
+]
 
 
 def find_decision_makers(domains: list[str]) -> list[dict]:
+    """Find C-suite / VP-level decision makers at the given domains via Apollo people search."""
     headers = {
-        "X-KEY": PROSPEO_API_KEY,
+        "x-api-key": APOLLO_API_KEY,
         "Content-Type": "application/json",
     }
 
+    resp = requests.post(
+        _ENDPOINT,
+        json={
+            "organization_domains": domains,
+            "person_titles": _SENIORITY_TITLES,
+            "page": 1,
+            "per_page": 10,
+        },
+        headers=headers,
+        timeout=30,
+    )
+
+    if not resp.ok:
+        raise Exception(
+            f"Apollo people search error {resp.status_code}: {resp.text}"
+        )
+
+    people: list[dict] = resp.json().get("people", [])
+
     seen_linkedin: set[str] = set()
     results: list[dict] = []
-    domains = domains[:_MAX_DOMAINS]
-    total = len(domains)
 
-    for i, domain in enumerate(domains, start=1):
-        logger.info("Prospeo: processing domain %d of %d: %s", i, total, domain)
-
-        try:
-            people = _fetch_people(domain, headers)
-        except Exception as exc:
-            logger.error("Prospeo: failed for %s — %s", domain, exc)
-            if i < total:
-                rate_limit(_RATE_DELAY)
+    for person in people:
+        linkedin_url: str = person.get("linkedin_url") or ""
+        if not linkedin_url or linkedin_url in seen_linkedin:
             continue
+        seen_linkedin.add(linkedin_url)
 
-        for person in people:
-            title: str = person.get("position") or ""
-            if not _is_decision_maker(title):
-                continue
+        domain: str = (person.get("organization") or {}).get("primary_domain") or ""
 
-            linkedin_url: str = person.get("linkedin") or ""
-            if not linkedin_url:
-                continue
-
-            if linkedin_url in seen_linkedin:
-                continue
-            seen_linkedin.add(linkedin_url)
-
-            results.append({
-                "name": person.get("full_name") or "",
-                "title": title,
-                "domain": domain,
-                "linkedin_url": linkedin_url,
-            })
-
-        if i < total:
-            rate_limit(_RATE_DELAY)
+        results.append({
+            "name":         person.get("name") or "",
+            "title":        person.get("title") or "",
+            "domain":       domain,
+            "linkedin_url": linkedin_url,
+        })
 
     logger.info(
-        "Prospeo: found %d decision makers across %d domains",
-        len(results), total,
+        "Apollo people: found %d decision makers across %d domains",
+        len(results), len(domains),
     )
     return results
