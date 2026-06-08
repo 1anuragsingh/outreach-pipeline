@@ -193,10 +193,11 @@ async def get_status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return {
-        "status": job["status"],
-        "stage": job["stage"],
-        "counts": job["counts"],
-        "error": job["error"],
+        "status":      job["status"],
+        "stage":       job["stage"],
+        "counts":      job["counts"],
+        "emails_sent": job["emails_sent"],
+        "error":       job["error"],
     }
 
 

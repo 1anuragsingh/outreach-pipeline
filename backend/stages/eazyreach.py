@@ -60,6 +60,12 @@ def resolve_emails(people: list[dict]) -> list[dict]:
     total = len(people)
 
     for i, person in enumerate(people, start=1):
+        # Hunter already resolved the email — no credit needed
+        if person.get("email"):
+            logger.info("EazyReach: pass-through (email already resolved) for %s", person.get("name", "unknown"))
+            results.append(person)
+            continue
+
         linkedin_url: str = person.get("linkedin_url", "")
         name: str = person.get("name", "unknown")
 

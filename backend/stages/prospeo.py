@@ -1,67 +1,111 @@
 import requests
 
-from config import APOLLO_API_KEY
+from config import SNOV_CLIENT_ID, SNOV_CLIENT_SECRET
+from utils.rate_limiter import rate_limit
 from utils.logger import logger
 
-_ENDPOINT = "https://api.apollo.io/v1/people/search"
+_TOKEN_URL   = "https://api.snov.io/v1/oauth/access_token"
+_SEARCH_URL  = "https://api.snov.io/v2/domain-emails-with-info"
+_RATE_DELAY  = 1.0
+_MAX_DOMAINS = 5
 
-# Apollo accepts a list of titles and does partial matching
-_SENIORITY_TITLES = [
-    "CEO", "CTO", "CMO", "CFO", "COO",
-    "VP", "Vice President",
-    "Director",
-    "Head",
-    "Founder", "Co-Founder",
-    "President",
-]
+# Snov.io seniority values that qualify as decision makers
+_SENIORITY_LEVELS = {"c_suite", "vp", "director"}
+
+_SENIORITY_KEYWORDS = (
+    "ceo", "cto", "cmo", "cfo", "coo",
+    "vp", "vice president",
+    "director",
+    "head of",
+    "founder", "co-founder",
+    "president",
+)
+
+
+def _get_token() -> str:
+    resp = requests.post(
+        _TOKEN_URL,
+        json={
+            "grant_type":    "client_credentials",
+            "client_id":     SNOV_CLIENT_ID,
+            "client_secret": SNOV_CLIENT_SECRET,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+def _is_decision_maker(title: str, seniority: str) -> bool:
+    if seniority.lower() in _SENIORITY_LEVELS:
+        return True
+    t = title.lower()
+    return any(kw in t for kw in _SENIORITY_KEYWORDS)
 
 
 def find_decision_makers(domains: list[str]) -> list[dict]:
-    """Find C-suite / VP-level decision makers at the given domains via Apollo people search."""
-    headers = {
-        "x-api-key": APOLLO_API_KEY,
-        "Content-Type": "application/json",
-    }
+    """Find decision makers at the given domains via Snov.io domain search.
+    Returns people dicts that already include email — Eazyreach will pass them through."""
+    token = _get_token()
 
-    resp = requests.post(
-        _ENDPOINT,
-        json={
-            "organization_domains": domains,
-            "person_titles": _SENIORITY_TITLES,
-            "page": 1,
-            "per_page": 10,
-        },
-        headers=headers,
-        timeout=30,
-    )
-
-    if not resp.ok:
-        raise Exception(
-            f"Apollo people search error {resp.status_code}: {resp.text}"
-        )
-
-    people: list[dict] = resp.json().get("people", [])
-
-    seen_linkedin: set[str] = set()
+    domains = domains[:_MAX_DOMAINS]
+    seen_emails: set[str] = set()
     results: list[dict] = []
+    total = len(domains)
 
-    for person in people:
-        linkedin_url: str = person.get("linkedin_url") or ""
-        if not linkedin_url or linkedin_url in seen_linkedin:
-            continue
-        seen_linkedin.add(linkedin_url)
+    for i, domain in enumerate(domains, start=1):
+        logger.info("Snov.io: processing domain %d of %d: %s", i, total, domain)
 
-        domain: str = (person.get("organization") or {}).get("primary_domain") or ""
+        try:
+            resp = requests.post(
+                _SEARCH_URL,
+                data={
+                    "access_token": token,
+                    "domain":       domain,
+                    "type":         "personal",
+                    "limit":        5,
+                },
+                timeout=30,
+            )
 
-        results.append({
-            "name":         person.get("name") or "",
-            "title":        person.get("title") or "",
-            "domain":       domain,
-            "linkedin_url": linkedin_url,
-        })
+            if not resp.ok:
+                logger.error("Snov: failed for %s — HTTP %s: %s", domain, resp.status_code, resp.text)
+                if i < total:
+                    rate_limit(_RATE_DELAY)
+                continue
 
-    logger.info(
-        "Apollo people: found %d decision makers across %d domains",
-        len(results), len(domains),
-    )
+            emails: list[dict] = resp.json().get("emails", [])
+
+            for person in emails:
+                title:    str = person.get("position")  or ""
+                seniority:str = person.get("seniority") or ""
+                email:    str = person.get("email")     or ""
+
+                if not email:
+                    continue
+                if not _is_decision_maker(title, seniority):
+                    continue
+                if email in seen_emails:
+                    continue
+                seen_emails.add(email)
+
+                first = person.get("firstName") or ""
+                last  = person.get("lastName")  or ""
+                name  = f"{first} {last}".strip()
+
+                results.append({
+                    "name":         name,
+                    "title":        title,
+                    "domain":       domain,
+                    "email":        email,
+                    "linkedin_url": person.get("linkedIn") or "",
+                })
+
+        except Exception as exc:
+            logger.error("Snov: failed for %s — %s", domain, exc)
+
+        if i < total:
+            rate_limit(_RATE_DELAY)
+
+    logger.info("Snov.io: found %d decision makers across %d domains", len(results), total)
     return results
