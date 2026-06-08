@@ -2,65 +2,96 @@ import time
 
 import requests
 
-from config import OCEAN_API_KEY
+from config import APOLLO_API_KEY
 from utils.logger import logger
 
-_ENDPOINT = "https://api.ocean.io/v2/search/companies"
-_MAX_RESULTS = 50
-_PAGE_SIZE = 25
+_ENRICH_URL = "https://api.apollo.io/v1/organizations/enrich"
+_SEARCH_URL = "https://api.apollo.io/v1/mixed_companies/search"
+_PER_PAGE   = 25
+_MAX_PAGES  = 2   # 50 results max — keeps free-tier credit usage low
 
 
 def find_lookalike_companies(seed_domain: str) -> list[str]:
-    """Return up to 50 lookalike company domains for the given seed domain."""
     headers = {
-        "x-api-token": OCEAN_API_KEY,
+        "x-api-key": APOLLO_API_KEY,
         "Content-Type": "application/json",
     }
 
+    # ── Step 1: Enrich seed domain to get industry tag ────────────────────
+    industry_tag_id: str | None = None
+    try:
+        resp = requests.post(
+            _ENRICH_URL,
+            json={"domain": seed_domain},
+            headers=headers,
+            timeout=30,
+        )
+        if resp.ok:
+            org = resp.json().get("organization") or {}
+            industry_tag_id = org.get("industry_tag_id") or None
+            logger.info(
+                "Apollo enrich: domain=%s industry_tag_id=%s",
+                seed_domain, industry_tag_id,
+            )
+        else:
+            logger.warning(
+                "Apollo enrich failed (%s) — falling back to keyword search",
+                resp.status_code,
+            )
+    except Exception as exc:
+        logger.warning("Apollo enrich error — falling back to keyword search: %s", exc)
+
+    time.sleep(1.5)
+
+    # ── Step 2: Search for similar companies (2 pages max = 50 results) ───
     seen: set[str] = set()
-    search_after: list | None = None
-    first_page = True
 
-    while len(seen) < _MAX_RESULTS:
+    for page in range(1, _MAX_PAGES + 1):
         payload: dict = {
-            "companiesFilters": {
-                "lookalikeDomains": [seed_domain],
-            },
-            "size": min(_PAGE_SIZE, _MAX_RESULTS - len(seen)),
-            "fields": ["domain"],
+            "organization_num_employees_ranges": ["1,500"],
+            "page": page,
+            "per_page": _PER_PAGE,
         }
-        if search_after is not None:
-            payload["searchAfter"] = search_after
 
-        if not first_page:
-            time.sleep(1)
-        first_page = False
+        if industry_tag_id:
+            payload["organization_industry_tag_ids"] = [industry_tag_id]
+        else:
+            # fallback: derive keyword from seed domain (e.g. "stripe" from "stripe.com")
+            keyword = seed_domain.split(".")[0]
+            payload["q_organization_keyword_tags"] = [keyword]
 
-        response = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=30)
+        resp = requests.post(
+            _SEARCH_URL,
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
 
-        if not response.ok:
+        if not resp.ok:
             raise Exception(
-                f"Ocean.io API error {response.status_code}: {response.text}"
+                f"Apollo search error {resp.status_code}: {resp.text}"
             )
 
-        data: dict = response.json()
-        companies: list[dict] = data.get("companies", [])
+        organizations: list[dict] = resp.json().get("organizations", [])
 
-        for company in companies:
-            domain: str | None = company.get("domain")
-            if domain:
+        for org in organizations:
+            domain: str | None = org.get("primary_domain") or None
+            if domain and domain != seed_domain:
                 seen.add(domain)
 
-        search_after = data.get("searchAfter")
-        if not search_after or not companies:
+        # stop early if Apollo returned a partial page (no more results)
+        if len(organizations) < _PER_PAGE:
             break
 
-    result = list(seen)[:_MAX_RESULTS]
+        if page < _MAX_PAGES:
+            time.sleep(1.5)
+
+    result = list(seen)
 
     if not result:
         raise Exception(
-            f"Ocean.io returned 0 lookalike companies for '{seed_domain}'"
+            f"Apollo: no lookalike companies found for {seed_domain}"
         )
 
-    logger.info("Ocean: found %d lookalike domains for %s", len(result), seed_domain)
+    logger.info("Apollo.io: found %d lookalike companies for %s", len(result), seed_domain)
     return result
