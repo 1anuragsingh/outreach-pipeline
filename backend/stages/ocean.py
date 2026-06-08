@@ -6,7 +6,7 @@ from config import APOLLO_API_KEY
 from utils.logger import logger
 
 _ENRICH_URL = "https://api.apollo.io/v1/organizations/enrich"
-_SEARCH_URL = "https://api.apollo.io/v1/mixed_companies/search"
+_SEARCH_URL = "https://api.apollo.io/v1/organizations/search"
 _PER_PAGE   = 25
 _MAX_PAGES  = 2   # 50 results max — keeps free-tier credit usage low
 
