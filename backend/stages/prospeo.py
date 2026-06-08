@@ -27,7 +27,7 @@ def _is_decision_maker(title: str) -> bool:
 def _fetch_people(domain: str, headers: dict) -> list[dict]:
     response = requests.post(
         _ENDPOINT,
-        json={"url": domain, "limit": 5},
+        json={"domain": domain, "limit": 5},
         headers=headers,
         timeout=30,
     )
