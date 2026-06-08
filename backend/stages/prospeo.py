@@ -4,8 +4,9 @@ from utils.rate_limiter import rate_limit, retry
 from config import PROSPEO_API_KEY
 from utils.logger import logger
 
-_ENDPOINT = "https://api.prospeo.io/domain-search"
-_RATE_DELAY = 1.5
+_ENDPOINT    = "https://api.prospeo.io/v1/domain-search"
+_RATE_DELAY  = 1.5
+_MAX_DOMAINS = 5   # only look up 5 domains per run — 5 Prospeo credits max
 
 _SENIORITY_KEYWORDS = (
     "ceo", "cto", "cmo", "cfo", "coo",
@@ -24,23 +25,21 @@ def _is_decision_maker(title: str) -> bool:
 
 @retry(max_attempts=3, delay=2, backoff=2)
 def _fetch_people(domain: str, headers: dict) -> list[dict]:
-    """Call Prospeo domain-search and return the raw people list. Raises on any error."""
     response = requests.post(
         _ENDPOINT,
-        json={"company": domain, "limit": 10},
+        json={"url": domain, "limit": 5},
         headers=headers,
         timeout=30,
     )
     if not response.ok:
         raise Exception(f"HTTP {response.status_code}: {response.text}")
     data: dict = response.json()
-    if data.get("error"):
-        raise Exception(f"API error: {data.get('message', 'unknown')}")
-    return data.get("people", [])
+    if not data.get("status"):
+        raise Exception(f"API error: {data.get('error_code', 'unknown')}")
+    return data.get("response", {}).get("email_list", [])
 
 
 def find_decision_makers(domains: list[str]) -> list[dict]:
-    """Return C-suite / VP-level decision makers found across the given domains."""
     headers = {
         "X-KEY": PROSPEO_API_KEY,
         "Content-Type": "application/json",
@@ -48,6 +47,7 @@ def find_decision_makers(domains: list[str]) -> list[dict]:
 
     seen_linkedin: set[str] = set()
     results: list[dict] = []
+    domains = domains[:_MAX_DOMAINS]
     total = len(domains)
 
     for i, domain in enumerate(domains, start=1):
@@ -62,11 +62,11 @@ def find_decision_makers(domains: list[str]) -> list[dict]:
             continue
 
         for person in people:
-            title: str = person.get("current_job_title") or ""
+            title: str = person.get("position") or ""
             if not _is_decision_maker(title):
                 continue
 
-            linkedin_url: str = person.get("linkedin_url") or ""
+            linkedin_url: str = person.get("linkedin") or ""
             if not linkedin_url:
                 continue
 

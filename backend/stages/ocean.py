@@ -7,8 +7,8 @@ from utils.logger import logger
 
 _ENRICH_URL = "https://api.apollo.io/v1/organizations/enrich"
 _SEARCH_URL = "https://api.apollo.io/v1/organizations/search"
-_PER_PAGE   = 25
-_MAX_PAGES  = 2   # 50 results max — keeps free-tier credit usage low
+_PER_PAGE   = 10
+_MAX_PAGES  = 1   # 10 companies max — 1 search request per run
 
 
 def find_lookalike_companies(seed_domain: str) -> list[str]:

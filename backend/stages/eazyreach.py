@@ -6,8 +6,9 @@ from utils.logger import logger
 
 # Verify this endpoint and response field names against your Eazyreach account.
 _ENDPOINT = "https://api.eazyreach.app/v1/email-finder"
-_RATE_DELAY = 2.0
+_RATE_DELAY     = 2.0
 _MIN_CONFIDENCE = 80
+_MAX_PEOPLE     = 10   # 10 Eazyreach credits max per run
 
 
 class _CreditsExhausted(Exception):
@@ -55,6 +56,7 @@ def resolve_emails(people: list[dict]) -> list[dict]:
     }
 
     results: list[dict] = []
+    people = people[:_MAX_PEOPLE]
     total = len(people)
 
     for i, person in enumerate(people, start=1):
